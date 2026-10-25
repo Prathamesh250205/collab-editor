@@ -1,0 +1,36 @@
+# Two app instances sharing Postgres and Redis, to show horizontal scaling:
+# open the same document on http://localhost:3000 and http://localhost:3001 and
+# edits/cursors sync between them through Redis.
+#   docker compose up --build
+services:
+  app1: &app
+    build: .
+    ports: ["3000:3000"]
+    environment:
+      DATABASE_URL: postgres://collab:collab@postgres:5432/collab
+      REDIS_URL: redis://redis:6379
+      AUTH_SECRET: ${AUTH_SECRET:-change-me-in-production}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_started }
+  app2:
+    <<: *app
+    ports: ["3001:3000"]
+
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: collab
+      POSTGRES_PASSWORD: collab
+      POSTGRES_DB: collab
+    volumes: [pgdata:/var/lib/postgresql]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "collab"]
+      interval: 2s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+
+volumes:
+  pgdata:

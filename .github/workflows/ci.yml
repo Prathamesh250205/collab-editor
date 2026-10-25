@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: collab
+          POSTGRES_PASSWORD: collab
+          POSTGRES_DB: collab
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U collab" --health-interval 2s --health-retries 15
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - name: Load test smoke run
+        run: |
+          npm start &
+          for i in $(seq 1 30); do curl -sf localhost:3000/api/health && break; sleep 1; done
+          npm run loadtest -- --levels 50 --seconds 5
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start the compose stack (2 app instances, Postgres, Redis)
+        run: docker compose up -d --build
+      - name: Both instances are healthy
+        run: |
+          for port in 3000 3001; do
+            for i in $(seq 1 30); do curl -sf localhost:$port/api/health && break; sleep 2; done
+            curl -sf localhost:$port/api/health || (docker compose logs; exit 1)
+          done
+      - if: always()
+        run: docker compose down -v
