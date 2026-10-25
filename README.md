@@ -4,6 +4,8 @@
 
 A real-time collaborative code editor, like Google Docs for code. Several people open the same document link, edit at the same time, and see each other's live cursors. Edits made offline merge automatically when the connection comes back.
 
+**Live demo:** https://collab-editor-mu-wine.vercel.app. Create an account, click "New document", and open the link in a second browser. The backend runs on Render's free tier, so the first visit after a quiet period can take up to a minute while the server wakes; you can start typing offline meanwhile.
+
 **Stack:** React + TypeScript, CodeMirror 6, Yjs (CRDT), Node.js WebSocket server, PostgreSQL, Redis pub/sub, Docker Compose, GitHub Actions.
 
 ## Features
