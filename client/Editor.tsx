@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
+import { IndexeddbPersistence } from 'y-indexeddb'
 import { yCollab } from 'y-codemirror.next'
 import { EditorView, basicSetup } from 'codemirror'
 import { javascript } from '@codemirror/lang-javascript'
@@ -22,6 +23,11 @@ export function Editor({ docId, name }: { docId: string; name: string }) {
     // The Y.Doc is this browser's replica of the document. Every edit goes into it
     // first (so typing never waits for the network), then the provider ships it to the server.
     const ydoc = new Y.Doc()
+    // Offline support: every edit is also stored in the browser (IndexedDB), so the
+    // document opens and stays editable with no network, even after a reload.
+    // When the socket reconnects, the sync handshake exchanges only the missing
+    // updates in both directions, and the CRDT merges them without conflicts.
+    const local = new IndexeddbPersistence(`doc-${docId}`, ydoc)
     const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
     const provider = new WebsocketProvider(wsUrl, docId, ydoc)
     const ytext = ydoc.getText('code')
@@ -46,6 +52,7 @@ export function Editor({ docId, name }: { docId: string; name: string }) {
     return () => {
       view.destroy()
       provider.destroy()
+      local.destroy()
       ydoc.destroy()
     }
   }, [docId, name])
@@ -73,7 +80,7 @@ export function Editor({ docId, name }: { docId: string; name: string }) {
     <div className="editor-page">
       <header>
         <a href="/">Collab Editor</a>
-        <span className={`status ${status}`}>{status}</span>
+        <span className={`status ${status}`}>{status === 'connected' ? 'online' : 'offline – edits saved locally'}</span>
         <div className="peers">
           {peers.map((p, i) => (
             <span key={i} className="peer" style={{ background: p.color }} title={p.name}>
