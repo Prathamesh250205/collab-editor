@@ -1,0 +1,14 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, sans-serif; background: #f6f7f9; color: #1d2330; }
+button { cursor: pointer; padding: 6px 12px; border: 1px solid #c6ccd6; border-radius: 6px; background: #fff; }
+.home { max-width: 520px; margin: 15vh auto; padding: 0 16px; }
+.editor-page { display: flex; flex-direction: column; height: 100vh; }
+header { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: #fff; border-bottom: 1px solid #dde1e7; flex-wrap: wrap; }
+header a { font-weight: 600; color: inherit; text-decoration: none; }
+.status { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #fdecc8; }
+.status.connected { background: #d3f4dc; }
+.peers { display: flex; gap: 6px; flex: 1; flex-wrap: wrap; }
+.peer { color: #fff; font-size: 12px; padding: 2px 8px; border-radius: 10px; }
+.main { display: flex; flex: 1; min-height: 0; }
+.editor { flex: 1; overflow: auto; background: #fff; }
+.editor .cm-editor { height: 100%; }
