@@ -1,6 +1,11 @@
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Editor } from './Editor.tsx'
+import { SERVER_URL } from './config.ts'
+
+// Wake the server as soon as the page opens: a free host that went to sleep
+// takes a while to start, and this overlaps that with the user typing their login.
+fetch(`${SERVER_URL}/api/health`).catch(() => {})
 
 type Session = { username: string; token: string }
 
@@ -25,17 +30,26 @@ function App() {
 
 function Login({ onLogin }: { onLogin: (s: Session) => void }) {
   const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
   async function submit(e: React.FormEvent<HTMLFormElement>, action: 'login' | 'register') {
     e.preventDefault()
     const form = new FormData(e.currentTarget.closest('form')!)
-    const res = await fetch(`/api/${action}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: form.get('username'), password: form.get('password') }),
-    })
-    const body = await res.json().catch(() => ({}))
-    if (res.ok) onLogin(body)
-    else setError(body.error ?? 'something went wrong')
+    setBusy(true)
+    setError('')
+    try {
+      const res = await fetch(`${SERVER_URL}/api/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: form.get('username'), password: form.get('password') }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (res.ok) onLogin(body)
+      else setError(body.error ?? 'something went wrong')
+    } catch {
+      setError('cannot reach the server, try again in a moment')
+    } finally {
+      setBusy(false)
+    }
   }
   return (
     <main className="home">
@@ -44,9 +58,10 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
         <label>Username <input name="username" autoComplete="username" required /></label>
         <label>Password <input name="password" type="password" autoComplete="current-password" required minLength={8} /></label>
         {error && <p className="error">{error}</p>}
+        {busy && <p>Connecting… the free server can take up to a minute to wake up.</p>}
         <div>
-          <button type="submit">Log in</button>{' '}
-          <button type="button" onClick={e => submit(e as unknown as React.FormEvent<HTMLFormElement>, 'register')}>Create account</button>
+          <button type="submit" disabled={busy}>Log in</button>{' '}
+          <button type="button" disabled={busy} onClick={e => submit(e as unknown as React.FormEvent<HTMLFormElement>, 'register')}>Create account</button>
         </div>
       </form>
     </main>

@@ -65,9 +65,9 @@ Measured on a 2-core laptop (i5-6300U). Server, Postgres, Redis and the load gen
 
 Above ~500 editors, latency climbs into seconds. CPU measurements show why: at 750 editors the **server process used under half of one core**, while the load generator used ~2.3 cores of the laptop's 2 physical cores. The ceiling in this table is therefore the test machine, and the server's own limit is higher but **not measured**.
 
-**Tests:** 16 tests, all passing:
+**Tests:** 17 tests, all passing:
 - A randomized convergence test: 5 seeds × 4,000 steps, about 10,000 concurrent edits across 5 replicas. The "network" drops, duplicates and reorders messages while replicas go offline. Every replica ends identical.
-- End-to-end tests against the real server and Postgres: sync, late join, restart persistence, offline merge on both sides, presence cleanup, randomized multi-client convergence, auth.
+- End-to-end tests against the real server and Postgres: sync, late join, restart persistence, offline merge on both sides, presence cleanup, randomized multi-client convergence, auth, CORS.
 - Multi-instance tests with 3 servers on one Redis, including a lost-message repair test.
 
 ## Design decisions
@@ -120,6 +120,20 @@ npm start
 `db-setup.sql` creates a dev-only `collab` role and database. Defaults: `DATABASE_URL=postgres://collab:collab@localhost:5432/collab`, no Redis (single instance). Set `REDIS_URL=redis://localhost:6379` and a different `PORT` to run more instances. Set `AUTH_SECRET` in production.
 
 For development with hot reload, run `npm run dev:server` and `npm run dev:client`, then open http://localhost:5173.
+
+**Free deployment: Vercel + Render + Neon**
+
+- **Frontend on Vercel:** a static site on a CDN, so it loads instantly.
+- **Backend on Render:** the WebSocket server and the API, built from the Dockerfile.
+- **Database on Neon:** Postgres.
+
+The backend can't go on Vercel: its serverless functions can't hold WebSocket connections open or keep documents in memory.
+
+1. **Neon:** create a project and copy its connection string.
+2. **Render:** New → Blueprint, then pick this repo. `render.yaml` sets up the service and generates `AUTH_SECRET`. Fill in `DATABASE_URL` (the Neon string), and later `CORS_ORIGIN` (your Vercel URL).
+3. **Vercel:** import this repo and set the environment variable `VITE_SERVER_URL` to the Render URL. `vercel.json` handles the build and the `/d/<id>` links.
+
+Render's free tier sleeps after 15 idle minutes and takes about a minute to wake. The page still loads instantly from Vercel and pings the server to wake it. Thanks to offline mode, you can start typing before the server is up, and edits sync once it wakes.
 
 **Tests and load test** (need Postgres and Redis running):
 

@@ -8,6 +8,7 @@ const server = await startServer({
   databaseUrl: process.env.DATABASE_URL ?? 'postgres://collab:collab@localhost:5432/collab',
   redisUrl: process.env.REDIS_URL,
   authSecret,
+  corsOrigin: process.env.CORS_ORIGIN,
 })
 console.log(`listening on http://localhost:${server.port}`)
 

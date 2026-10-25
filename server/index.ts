@@ -13,6 +13,7 @@ export type ServerOptions = {
   databaseUrl: string
   redisUrl?: string // without it the server runs as a single instance
   authSecret: string // signs login tokens
+  corsOrigin?: string // set when the frontend is served from another domain (e.g. Vercel)
   saveIntervalMs?: number
   versionIntervalMs?: number
 }
@@ -31,6 +32,19 @@ export async function startServer(opts: ServerOptions) {
   })
   const app = express()
   app.use(express.json())
+  // Frontend on another domain: allow exactly that origin to call the API.
+  // (WebSockets aren't covered by CORS; they're protected by the token instead.)
+  if (opts.corsOrigin) {
+    const origin = opts.corsOrigin
+    app.use((req, res, next) => {
+      res.setHeader('Access-Control-Allow-Origin', origin)
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST')
+      res.setHeader('Vary', 'Origin')
+      if (req.method === 'OPTIONS') return void res.status(204).end()
+      next()
+    })
+  }
   app.get('/api/health', (_req, res) => { res.json({ ok: true }) })
 
   app.post('/api/register', async (req, res) => {

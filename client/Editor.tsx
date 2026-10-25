@@ -5,6 +5,7 @@ import { IndexeddbPersistence } from 'y-indexeddb'
 import { yCollab } from 'y-codemirror.next'
 import { EditorView, basicSetup } from 'codemirror'
 import { javascript } from '@codemirror/lang-javascript'
+import { SERVER_URL, WS_URL } from './config.ts'
 
 type Peer = { name: string; color: string }
 type Version = { id: number; createdAt: string; bytes: number }
@@ -30,8 +31,7 @@ export function Editor({ docId, name, token, onLogout }: Props) {
     // When the socket reconnects, the sync handshake exchanges only the missing
     // updates in both directions, and the CRDT merges them without conflicts.
     const local = new IndexeddbPersistence(`doc-${docId}`, ydoc)
-    const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
-    const provider = new WebsocketProvider(wsUrl, docId, ydoc, { params: { token } })
+    const provider = new WebsocketProvider(WS_URL, docId, ydoc, { params: { token } })
     const ytext = ydoc.getText('code')
     ytextRef.current = ytext
 
@@ -59,7 +59,7 @@ export function Editor({ docId, name, token, onLogout }: Props) {
     }
   }, [docId, name, token])
 
-  const api = (path: string) => fetch(`/api/docs/${docId}${path}`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json())
+  const api = (path: string) => fetch(`${SERVER_URL}/api/docs/${docId}${path}`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json())
 
   async function toggleHistory() {
     if (versions) return setVersions(null), setPreview(null)

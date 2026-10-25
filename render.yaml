@@ -1,0 +1,15 @@
+# Render blueprint for the backend (WebSocket server + API), built from the Dockerfile.
+# The frontend is on Vercel; DATABASE_URL points at Neon.
+services:
+  - type: web
+    name: collab-editor
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL # Neon connection string
+        sync: false
+      - key: CORS_ORIGIN # the Vercel URL, e.g. https://collab-editor.vercel.app
+        sync: false
+      - key: AUTH_SECRET
+        generateValue: true

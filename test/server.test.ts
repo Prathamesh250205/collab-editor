@@ -132,3 +132,16 @@ test('auth: register, login, and rejection of missing or forged tokens', async (
   expect(await tryWs(`?token=${forged}`)).toBe('rejected')
   expect(await tryWs(`?token=${token}`)).toBe('open')
 })
+
+test('CORS: only the configured frontend origin is allowed', async () => {
+  const { startServer } = await import('../server/index.ts')
+  const { DATABASE_URL } = await import('./helpers.ts')
+  const s = await startServer({ port: 0, databaseUrl: DATABASE_URL, authSecret: SECRET, corsOrigin: 'https://app.example' })
+  const pre = await fetch(`http://localhost:${s.port}/api/login`, { method: 'OPTIONS' })
+  expect(pre.status).toBe(204)
+  expect(pre.headers.get('access-control-allow-origin')).toBe('https://app.example')
+  expect(pre.headers.get('access-control-allow-headers')).toContain('Authorization')
+  await s.close()
+  // Without corsOrigin (same-origin deployment) no CORS headers are sent.
+  expect((await fetch(`http://localhost:${server.port}/api/health`)).headers.get('access-control-allow-origin')).toBeNull()
+})
