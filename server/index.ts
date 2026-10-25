@@ -4,14 +4,37 @@ import { existsSync } from 'node:fs'
 import express from 'express'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { Rooms } from './rooms.ts'
+import { Store } from './store.ts'
 
-export type ServerOptions = { port: number }
+export type ServerOptions = {
+  port: number
+  databaseUrl: string
+  saveIntervalMs?: number
+  versionIntervalMs?: number
+}
+
+const DOC_ID = /^[\w-]{1,64}$/
 
 export async function startServer(opts: ServerOptions) {
-  const rooms = new Rooms()
+  const store = await Store.connect(opts.databaseUrl)
+  const rooms = new Rooms({
+    store,
+    saveIntervalMs: opts.saveIntervalMs ?? 2_000,
+    versionIntervalMs: opts.versionIntervalMs ?? 60_000,
+  })
   const app = express()
   app.use(express.json())
   app.get('/api/health', (_req, res) => { res.json({ ok: true }) })
+
+  app.get('/api/docs/:id/versions', async (req, res) => {
+    if (!DOC_ID.test(req.params.id)) return void res.status(400).end()
+    res.json(await store.listVersions(req.params.id))
+  })
+  app.get('/api/docs/:id/versions/:vid', async (req, res) => {
+    const text = DOC_ID.test(req.params.id) ? await store.versionText(req.params.id, Number(req.params.vid)) : null
+    if (text === null) return void res.status(404).end()
+    res.json({ text })
+  })
 
   // In production the built React app is served from the same port.
   const dist = path.resolve(import.meta.dirname, '../dist')
@@ -60,6 +83,8 @@ export async function startServer(opts: ServerOptions) {
       clearInterval(pinger)
       for (const ws of wss.clients) ws.terminate()
       await new Promise(resolve => server.close(resolve))
+      await rooms.closeAll()
+      await store.close()
     },
   }
 }

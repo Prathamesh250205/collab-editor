@@ -12,3 +12,8 @@ header a { font-weight: 600; color: inherit; text-decoration: none; }
 .main { display: flex; flex: 1; min-height: 0; }
 .editor { flex: 1; overflow: auto; background: #fff; }
 .editor .cm-editor { height: 100%; }
+.history { width: 300px; overflow: auto; padding: 12px; border-left: 1px solid #dde1e7; display: flex; flex-direction: column; gap: 6px; }
+.history h3 { margin: 0 0 4px; }
+.history .active { border-color: #4363d8; }
+.history pre { background: #fff; padding: 8px; font-size: 12px; max-height: 40vh; overflow: auto; border: 1px solid #dde1e7; }
+@media (max-width: 700px) { .main { flex-direction: column; } .history { width: auto; max-height: 45vh; border-left: 0; border-top: 1px solid #dde1e7; } }

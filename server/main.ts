@@ -1,6 +1,9 @@
 import { startServer } from './index.ts'
 
-const server = await startServer({ port: Number(process.env.PORT ?? 3000) })
+const server = await startServer({
+  port: Number(process.env.PORT ?? 3000),
+  databaseUrl: process.env.DATABASE_URL ?? 'postgres://collab:collab@localhost:5432/collab',
+})
 console.log(`listening on http://localhost:${server.port}`)
 
 for (const signal of ['SIGINT', 'SIGTERM']) {

@@ -7,6 +7,7 @@ import * as awarenessProtocol from 'y-protocols/awareness'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
 import type { WebSocket } from 'ws'
+import type { Store } from './store.ts'
 
 // Message types of the y-websocket wire protocol (the browser's WebsocketProvider speaks it).
 const MSG_SYNC = 0
@@ -19,6 +20,7 @@ export class Room {
   // Each socket -> the awareness client ids it owns, so we can clear its cursor when it leaves.
   readonly conns = new Map<WebSocket, Set<number>>()
   closed = false
+  saver?: Saver
 
   constructor(name: string) {
     this.name = name
@@ -105,19 +107,50 @@ function send(ws: WebSocket, msg: Uint8Array) {
   if (ws.readyState === ws.OPEN) ws.send(msg, err => err && ws.terminate())
 }
 
-export class Rooms {
-  private rooms = new Map<string, Room>()
+export type RoomsOptions = {
+  store: Store
+  saveIntervalMs: number // how often a changed document is written to Postgres
+  versionIntervalMs: number // how often a changed document gets a version-history snapshot
+}
 
-  get(name: string): Room {
+// Owns all open rooms. A room is loaded from Postgres when its first user joins,
+// saved periodically while it changes, and saved + unloaded when its last user leaves.
+export class Rooms {
+  private rooms = new Map<string, Promise<Room>>()
+  private closing = new Map<string, Promise<void>>() // rooms still writing their final save
+  private opts: RoomsOptions
+
+  constructor(opts: RoomsOptions) {
+    this.opts = opts
+  }
+
+  private get(name: string): Promise<Room> {
     let room = this.rooms.get(name)
-    if (!room) this.rooms.set(name, (room = new Room(name)))
+    if (!room) {
+      room = this.load(name)
+      this.rooms.set(name, room)
+      room.catch(() => this.rooms.delete(name))
+    }
     return room
   }
 
-  connect(ws: WebSocket, name: string) {
-    const room = this.get(name)
-    room.join(ws)
+  private async load(name: string) {
+    await this.closing.get(name) // don't read a state that is still being written
+    const room = new Room(name)
+    const state = await this.opts.store.load(name)
+    if (state) Y.applyUpdate(room.doc, state)
+    room.saver = new Saver(room, this.opts) // created after loading, so loading itself isn't a "change"
+
+    return room
+  }
+
+  async connect(ws: WebSocket, name: string) {
+    // Messages can arrive while the room is still loading from Postgres; queue them.
+    const queue: Uint8Array[] = []
+    let room: Room | undefined
+    let gone = false
     ws.on('message', (data: Buffer) => {
+      if (!room) return void queue.push(new Uint8Array(data))
       try {
         room.handle(ws, new Uint8Array(data))
       } catch (err) {
@@ -126,11 +159,100 @@ export class Rooms {
       }
     })
     ws.on('close', () => {
-      room.leave(ws)
-      if (room.conns.size === 0) {
-        this.rooms.delete(name)
-        room.destroy()
+      gone = true
+      if (room) this.leave(room, ws)
+    })
+
+    let r: Room
+    try {
+      do r = await this.get(name)
+      while (r.closed) // it was unloaded while we waited; load it again
+    } catch (err) {
+      console.error(`failed to load ${name}`, err)
+      return ws.close(1011)
+    }
+    if (gone) return
+    room = r
+    room.join(ws)
+    for (const msg of queue) room.handle(ws, msg)
+  }
+
+  private leave(room: Room, ws: WebSocket) {
+    room.leave(ws)
+    if (room.conns.size > 0) return
+    this.rooms.delete(room.name)
+    room.closed = true
+    const done = room.saver!.stop().finally(() => {
+      room.destroy()
+      this.closing.delete(room.name)
+    })
+    this.closing.set(room.name, done)
+  }
+
+  // Graceful shutdown: save every open room.
+  async closeAll() {
+    const rooms = await Promise.allSettled(this.rooms.values())
+    this.rooms.clear()
+    await Promise.all(rooms.map(r => r.status === 'fulfilled' && r.value.saver!.stop()))
+    await Promise.all(this.closing.values())
+  }
+}
+
+// Writes a room to Postgres at most once per saveIntervalMs while it keeps changing,
+// and snapshots it into version history at most once per versionIntervalMs.
+// ponytail: saves the full state each time (O(document size)); an append-only update
+// log would be cheaper for very large documents.
+class Saver {
+  private room: Room
+  private opts: RoomsOptions
+  private dirty = false
+  private dirtySinceVersion = false
+  private timer?: NodeJS.Timeout
+  private versionTimer: NodeJS.Timeout
+  private saving = Promise.resolve()
+  private stopped = false
+
+  constructor(room: Room, opts: RoomsOptions) {
+    this.room = room
+    this.opts = opts
+    room.doc.on('update', () => this.changed())
+    this.versionTimer = setInterval(() => this.run(false, true), opts.versionIntervalMs)
+  }
+
+  private changed() {
+    this.dirty = this.dirtySinceVersion = true
+    if (this.stopped) return
+    this.timer ??= setTimeout(() => this.run(true, false), this.opts.saveIntervalMs)
+  }
+
+  // Saves are chained so two never run at once for the same room.
+  private run(save: boolean, version: boolean) {
+    if (save) this.timer = undefined
+    this.saving = this.saving.then(async () => {
+      const doSave = save && this.dirty
+      const doVersion = version && this.dirtySinceVersion
+      if (!doSave && !doVersion) return
+      const state = Y.encodeStateAsUpdate(this.room.doc)
+      if (doSave) this.dirty = false
+      if (doVersion) this.dirtySinceVersion = false
+      try {
+        if (doSave) await this.opts.store.save(this.room.name, state)
+        if (doVersion) await this.opts.store.addVersion(this.room.name, state, this.opts.versionIntervalMs / 2)
+      } catch (err) {
+        console.error(`saving ${this.room.name} failed, will retry`, err)
+        if (doSave) this.changed()
+        if (doVersion) this.dirtySinceVersion = true
       }
     })
+    return this.saving
+  }
+
+  // Final save + snapshot when the room is unloaded.
+  // ponytail: if this last save fails the unsaved edits are only logged, not retried.
+  stop() {
+    this.stopped = true
+    clearTimeout(this.timer)
+    clearInterval(this.versionTimer)
+    return this.run(true, true)
   }
 }
