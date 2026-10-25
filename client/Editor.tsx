@@ -11,7 +11,9 @@ type Version = { id: number; createdAt: string; bytes: number }
 
 const COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#f032e6', '#469990']
 
-export function Editor({ docId, name }: { docId: string; name: string }) {
+type Props = { docId: string; name: string; token: string; onLogout: () => void }
+
+export function Editor({ docId, name, token, onLogout }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState('connecting')
   const [peers, setPeers] = useState<Peer[]>([])
@@ -29,7 +31,7 @@ export function Editor({ docId, name }: { docId: string; name: string }) {
     // updates in both directions, and the CRDT merges them without conflicts.
     const local = new IndexeddbPersistence(`doc-${docId}`, ydoc)
     const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
-    const provider = new WebsocketProvider(wsUrl, docId, ydoc)
+    const provider = new WebsocketProvider(wsUrl, docId, ydoc, { params: { token } })
     const ytext = ydoc.getText('code')
     ytextRef.current = ytext
 
@@ -55,14 +57,16 @@ export function Editor({ docId, name }: { docId: string; name: string }) {
       local.destroy()
       ydoc.destroy()
     }
-  }, [docId, name])
+  }, [docId, name, token])
+
+  const api = (path: string) => fetch(`/api/docs/${docId}${path}`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json())
 
   async function toggleHistory() {
     if (versions) return setVersions(null), setPreview(null)
-    setVersions(await (await fetch(`/api/docs/${docId}/versions`)).json())
+    setVersions(await api('/versions'))
   }
   async function openVersion(id: number) {
-    const { text } = await (await fetch(`/api/docs/${docId}/versions/${id}`)).json()
+    const { text } = await api(`/versions/${id}`)
     setPreview({ id, text })
   }
   // Restoring is just another edit (replace everything with the old text), so it syncs
@@ -90,6 +94,7 @@ export function Editor({ docId, name }: { docId: string; name: string }) {
         </div>
         <button onClick={toggleHistory}>History</button>
         <button onClick={() => navigator.clipboard.writeText(location.href)}>Copy link</button>
+        <button onClick={onLogout} title={`Logged in as ${name}`}>Log out</button>
       </header>
       <div className="main">
         <div ref={host} className="editor" />

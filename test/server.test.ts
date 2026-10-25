@@ -1,12 +1,15 @@
 // End-to-end tests against a real server (real WebSockets, real Postgres).
 import { test, expect, beforeAll, afterAll } from 'vitest'
-import { start, connect, waitFor, sleep, uid, rng, randomEdit, type Client } from './helpers.ts'
+import WebSocket from 'ws'
+import { start, connect, waitFor, sleep, uid, rng, randomEdit, SECRET, type Client } from './helpers.ts'
+import { signToken } from '../server/auth.ts'
 
 let server: Awaited<ReturnType<typeof start>>
 beforeAll(async () => { server = await start() })
 afterAll(async () => { await server?.close() })
 
 const close = (...clients: Client[]) => clients.forEach(c => c.provider.destroy())
+const authed = (path: string) => fetch(`http://localhost:${server.port}${path}`, { headers: { Authorization: `Bearer ${signToken('tester', SECRET)}` } })
 
 test('edits sync between two clients', async () => {
   const doc = uid('basic')
@@ -39,9 +42,9 @@ test('document survives a server restart (Postgres) and gets a version snapshot'
   server = await start()
   const b = await connect(server.port, doc)
   expect(b.text.toString()).toBe('persist me')
-  const versions = await (await fetch(`http://localhost:${server.port}/api/docs/${doc}/versions`)).json()
+  const versions = await (await authed(`/api/docs/${doc}/versions`)).json()
   expect(versions.length).toBeGreaterThan(0)
-  const { text } = await (await fetch(`http://localhost:${server.port}/api/docs/${doc}/versions/${versions[0].id}`)).json()
+  const { text } = await (await authed(`/api/docs/${doc}/versions/${versions[0].id}`)).json()
   expect(text).toBe('persist me')
   close(b)
 })
@@ -95,6 +98,37 @@ test('randomized: many clients editing concurrently through the server converge'
 })
 
 test('rejects bad document ids', async () => {
-  const res = await fetch(`http://localhost:${server.port}/api/docs/${'x'.repeat(100)}/versions`)
+  const res = await authed(`/api/docs/${'x'.repeat(100)}/versions`)
   expect(res.status).toBe(400)
+})
+
+test('auth: register, login, and rejection of missing or forged tokens', async () => {
+  const base = `http://localhost:${server.port}/api`
+  const post = (path: string, body: object) =>
+    fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const username = uid('u').slice(0, 30)
+
+  expect((await post('/register', { username, password: 'short' })).status).toBe(400)
+  const reg = await post('/register', { username, password: 'correct horse' })
+  expect(reg.status).toBe(200)
+  expect((await post('/register', { username, password: 'correct horse' })).status).toBe(409)
+  expect((await post('/login', { username, password: 'wrong password' })).status).toBe(401)
+  const { token } = await (await post('/login', { username, password: 'correct horse' })).json()
+
+  // History API needs a valid token
+  expect((await fetch(`${base}/docs/x/versions`)).status).toBe(401)
+  expect((await fetch(`${base}/docs/x/versions`, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(200)
+  const forged = signToken(username, 'not-the-secret')
+  expect((await fetch(`${base}/docs/x/versions`, { headers: { Authorization: `Bearer ${forged}` } })).status).toBe(401)
+
+  // WebSocket upgrade needs a valid token
+  const tryWs = (q: string) =>
+    new Promise(resolve => {
+      const ws = new WebSocket(`ws://localhost:${server.port}/ws/x${q}`)
+      ws.on('open', () => (ws.close(), resolve('open')))
+      ws.on('error', () => resolve('rejected'))
+    })
+  expect(await tryWs('')).toBe('rejected')
+  expect(await tryWs(`?token=${forged}`)).toBe('rejected')
+  expect(await tryWs(`?token=${token}`)).toBe('open')
 })

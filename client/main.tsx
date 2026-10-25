@@ -1,28 +1,67 @@
+import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Editor } from './Editor.tsx'
+
+type Session = { username: string; token: string }
 
 // No router library: the only routes are "/" (home) and "/d/<docId>" (a document).
 // The document link *is* the share link.
 function App() {
+  const [session, setSession] = useState<Session | null>(loadSession)
+  if (!session) return <Login onLogin={s => (localStorage.setItem('session', JSON.stringify(s)), setSession(s))} />
+
+  const logout = () => (localStorage.removeItem('session'), setSession(null))
   const docId = location.pathname.match(/^\/d\/([\w-]{1,64})$/)?.[1]
-  const name = getName()
-  if (docId) return <Editor docId={docId} name={name} />
+  if (docId) return <Editor docId={docId} name={session.username} token={session.token} onLogout={logout} />
   return (
     <main className="home">
       <h1>Collab Editor</h1>
       <p>Real-time collaborative code editing. Create a document and share the link.</p>
-      <button onClick={() => location.assign(`/d/${crypto.randomUUID().slice(0, 8)}`)}>New document</button>
+      <button onClick={() => location.assign(`/d/${crypto.randomUUID().slice(0, 8)}`)}>New document</button>{' '}
+      <button onClick={logout}>Log out ({session.username})</button>
     </main>
   )
 }
 
-function getName() {
-  let name = localStorage.getItem('name')
-  if (!name) {
-    name = prompt('Your name?')?.trim() || `guest-${Math.floor(Math.random() * 1000)}`
-    localStorage.setItem('name', name)
+function Login({ onLogin }: { onLogin: (s: Session) => void }) {
+  const [error, setError] = useState('')
+  async function submit(e: React.FormEvent<HTMLFormElement>, action: 'login' | 'register') {
+    e.preventDefault()
+    const form = new FormData(e.currentTarget.closest('form')!)
+    const res = await fetch(`/api/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: form.get('username'), password: form.get('password') }),
+    })
+    const body = await res.json().catch(() => ({}))
+    if (res.ok) onLogin(body)
+    else setError(body.error ?? 'something went wrong')
   }
-  return name
+  return (
+    <main className="home">
+      <h1>Collab Editor</h1>
+      <form className="login" onSubmit={e => submit(e, 'login')}>
+        <label>Username <input name="username" autoComplete="username" required /></label>
+        <label>Password <input name="password" type="password" autoComplete="current-password" required minLength={8} /></label>
+        {error && <p className="error">{error}</p>}
+        <div>
+          <button type="submit">Log in</button>{' '}
+          <button type="button" onClick={e => submit(e as unknown as React.FormEvent<HTMLFormElement>, 'register')}>Create account</button>
+        </div>
+      </form>
+    </main>
+  )
+}
+
+// A stored token is dropped once it has expired (the server would reject it anyway).
+function loadSession(): Session | null {
+  try {
+    const s: Session = JSON.parse(localStorage.getItem('session') ?? 'null')
+    const { exp } = JSON.parse(atob(s.token.split('.')[0].replace(/-/g, '+').replace(/_/g, '/')))
+    return exp > Date.now() ? s : null
+  } catch {
+    return null
+  }
 }
 
 createRoot(document.getElementById('root')!).render(<App />)

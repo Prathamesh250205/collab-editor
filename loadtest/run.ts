@@ -16,6 +16,7 @@ import { availableParallelism } from 'node:os'
 import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 import WebSocket from 'ws'
+import { signToken } from '../server/auth.ts'
 
 const { values: parsed } = parseArgs({
   options: {
@@ -24,7 +25,7 @@ const { values: parsed } = parseArgs({
     perDoc: { type: 'string', default: '10' },
     rate: { type: 'string', default: '2' }, // edits per second per editor
     seconds: { type: 'string', default: '20' },
-    token: { type: 'string', default: '' },
+    secret: { type: 'string', default: 'dev-only-secret' }, // server's AUTH_SECRET, to sign a login token
     workers: { type: 'string', default: String(Math.max(1, availableParallelism() - 1)) },
   },
 })
@@ -44,7 +45,7 @@ function connect(url: string, docId: string): Promise<Editor> {
   const provider = new WebsocketProvider(url, docId, doc, {
     WebSocketPolyfill: WebSocket as unknown as typeof globalThis.WebSocket,
     disableBc: true,
-    params: args.token ? { token: args.token } : {},
+    params: { token: signToken('loadtest', args.secret) },
   })
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(`connect timeout ${docId}`)), 30_000)

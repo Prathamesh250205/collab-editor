@@ -12,20 +12,34 @@ export class Store {
 
   static async connect(url: string) {
     const store = new Store(new pg.Pool({ connectionString: url }))
-    await store.pool.query(`
-      create table if not exists documents (
-        id text primary key,
-        state bytea not null,
-        updated_at timestamptz not null default now()
-      );
-      create table if not exists versions (
-        id bigserial primary key,
-        doc_id text not null,
-        state bytea not null,
-        created_at timestamptz not null default now()
-      );
-      create index if not exists versions_doc_idx on versions (doc_id, id desc);
-    `)
+    // Instances starting at the same time would race on "create table if not exists",
+    // so they take turns using a Postgres advisory lock (held on one connection).
+    const client = await store.pool.connect()
+    try {
+      await client.query('select pg_advisory_lock(7262)')
+      await client.query(`
+        create table if not exists documents (
+          id text primary key,
+          state bytea not null,
+          updated_at timestamptz not null default now()
+        );
+        create table if not exists versions (
+          id bigserial primary key,
+          doc_id text not null,
+          state bytea not null,
+          created_at timestamptz not null default now()
+        );
+        create index if not exists versions_doc_idx on versions (doc_id, id desc);
+        create table if not exists users (
+          username text primary key,
+          password_hash text not null,
+          created_at timestamptz not null default now()
+        );
+      `)
+    } finally {
+      await client.query('select pg_advisory_unlock(7262)').catch(() => {})
+      client.release()
+    }
     return store
   }
 
@@ -81,6 +95,21 @@ export class Store {
     const doc = new Y.Doc()
     Y.applyUpdate(doc, rows[0].state)
     return doc.getText('code').toString()
+  }
+
+  // Returns false if the username is taken (the primary key decides, so two
+  // simultaneous registrations can't both win).
+  async createUser(username: string, passwordHash: string) {
+    const { rowCount } = await this.pool.query(
+      'insert into users (username, password_hash) values ($1, $2) on conflict do nothing',
+      [username, passwordHash],
+    )
+    return rowCount === 1
+  }
+
+  async passwordHash(username: string): Promise<string | null> {
+    const { rows } = await this.pool.query('select password_hash from users where username = $1', [username])
+    return rows[0]?.password_hash ?? null
   }
 
   close() {

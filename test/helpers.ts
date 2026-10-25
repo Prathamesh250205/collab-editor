@@ -2,15 +2,18 @@ import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 import WebSocket from 'ws'
 import { startServer } from '../server/index.ts'
+import { signToken } from '../server/auth.ts'
 
 export const DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://collab:collab@localhost:5432/collab'
 export const REDIS_URL = process.env.REDIS_URL ?? 'redis://localhost:6379'
+export const SECRET = 'test-secret'
 
 export function start(opts: { redis?: boolean; port?: number } = {}) {
   return startServer({
     port: opts.port ?? 0,
     databaseUrl: DATABASE_URL,
     redisUrl: opts.redis ? REDIS_URL : undefined,
+    authSecret: SECRET,
     saveIntervalMs: 50,
     versionIntervalMs: 200,
   })
@@ -26,6 +29,7 @@ export function connect(port: number, docId: string, name = 'tester'): Promise<C
     // y-websocket also syncs same-browser tabs over BroadcastChannel, which Node has too.
     // Each test client stands for a separate machine, so everything must go through the server.
     disableBc: true,
+    params: { token: signToken(name, SECRET) },
   })
   provider.awareness.setLocalStateField('user', { name })
   return new Promise(resolve => provider.once('sync', () => resolve({ doc, text: doc.getText('code'), provider })))
