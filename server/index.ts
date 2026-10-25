@@ -5,10 +5,12 @@ import express from 'express'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { Rooms } from './rooms.ts'
 import { Store } from './store.ts'
+import { PubSub } from './pubsub.ts'
 
 export type ServerOptions = {
   port: number
   databaseUrl: string
+  redisUrl?: string // without it the server runs as a single instance
   saveIntervalMs?: number
   versionIntervalMs?: number
 }
@@ -17,8 +19,10 @@ const DOC_ID = /^[\w-]{1,64}$/
 
 export async function startServer(opts: ServerOptions) {
   const store = await Store.connect(opts.databaseUrl)
+  const pubsub = opts.redisUrl ? new PubSub(opts.redisUrl) : undefined
   const rooms = new Rooms({
     store,
+    pubsub,
     saveIntervalMs: opts.saveIntervalMs ?? 2_000,
     versionIntervalMs: opts.versionIntervalMs ?? 60_000,
   })
@@ -85,6 +89,7 @@ export async function startServer(opts: ServerOptions) {
       await new Promise(resolve => server.close(resolve))
       await rooms.closeAll()
       await store.close()
+      await pubsub?.close()
     },
   }
 }

@@ -8,6 +8,7 @@ import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
 import type { WebSocket } from 'ws'
 import type { Store } from './store.ts'
+import { type PubSub, UPDATE, AWARENESS, HELLO } from './pubsub.ts'
 
 // Message types of the y-websocket wire protocol (the browser's WebsocketProvider speaks it).
 const MSG_SYNC = 0
@@ -109,6 +110,7 @@ function send(ws: WebSocket, msg: Uint8Array) {
 
 export type RoomsOptions = {
   store: Store
+  pubsub?: PubSub // set when running several instances behind a load balancer
   saveIntervalMs: number // how often a changed document is written to Postgres
   versionIntervalMs: number // how often a changed document gets a version-history snapshot
 }
@@ -140,7 +142,7 @@ export class Rooms {
     const state = await this.opts.store.load(name)
     if (state) Y.applyUpdate(room.doc, state)
     room.saver = new Saver(room, this.opts) // created after loading, so loading itself isn't a "change"
-
+    if (this.opts.pubsub) await linkInstances(room, this.opts.pubsub)
     return room
   }
 
@@ -182,7 +184,7 @@ export class Rooms {
     if (room.conns.size > 0) return
     this.rooms.delete(room.name)
     room.closed = true
-    const done = room.saver!.stop().finally(() => {
+    const done = Promise.all([room.saver!.stop(), this.opts.pubsub?.unsubscribe(room.name)]).then(() => {}, err => console.error(err)).finally(() => {
       room.destroy()
       this.closing.delete(room.name)
     })
@@ -196,6 +198,35 @@ export class Rooms {
     await Promise.all(rooms.map(r => r.status === 'fulfilled' && r.value.saver!.stop()))
     await Promise.all(this.closing.values())
   }
+}
+
+const FROM_REDIS = Symbol('from-redis')
+
+// Keeps this instance's copy of a room in sync with the same room on other instances.
+// Changes made by our clients go out to Redis; changes from Redis are applied locally
+// (and forwarded to our clients by the room's normal update handler) but not re-published.
+async function linkInstances(room: Room, pubsub: PubSub) {
+  room.doc.on('update', (update: Uint8Array, origin: unknown) => {
+    if (origin !== FROM_REDIS) pubsub.publish(room.name, UPDATE, update)
+  })
+  room.awareness.on('update', ({ added, updated, removed }: AwarenessChange, origin: unknown) => {
+    if (origin !== FROM_REDIS)
+      pubsub.publish(room.name, AWARENESS, awarenessProtocol.encodeAwarenessUpdate(room.awareness, added.concat(updated, removed)))
+  })
+  await pubsub.subscribe(room.name, (kind, payload) => {
+    if (room.closed) return
+    if (kind === UPDATE) Y.applyUpdate(room.doc, payload, FROM_REDIS)
+    else if (kind === AWARENESS) awarenessProtocol.applyAwarenessUpdate(room.awareness, payload, FROM_REDIS)
+    else if (kind === HELLO) {
+      // Another instance just opened this doc. Send it whatever it is missing
+      // (edits we have not saved to Postgres yet) and who is here right now.
+      pubsub.publish(room.name, UPDATE, Y.encodeStateAsUpdate(room.doc, payload))
+      const clients = [...room.awareness.getStates().keys()]
+      if (clients.length) pubsub.publish(room.name, AWARENESS, awarenessProtocol.encodeAwarenessUpdate(room.awareness, clients))
+    }
+  })
+  // Subscribe first, then say hello, so no reply can be missed.
+  pubsub.publish(room.name, HELLO, Y.encodeStateVector(room.doc))
 }
 
 // Writes a room to Postgres at most once per saveIntervalMs while it keeps changing,
