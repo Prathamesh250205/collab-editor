@@ -5,6 +5,7 @@ services:
     name: collab-editor
     runtime: docker
     plan: free
+    region: singapore # same region as the Neon database, close to users in India
     healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL # Neon connection string
