@@ -17,6 +17,7 @@ export class PubSub {
   private pub: Redis
   private sub: Redis // a subscribed Redis connection can't publish, so we need two
   private handlers = new Map<string, Handler>()
+  private closed = false
 
   constructor(url: string) {
     this.pub = new Redis(url)
@@ -40,6 +41,7 @@ export class PubSub {
   }
 
   publish(docId: string, kind: number, payload: Uint8Array) {
+    if (this.closed) return // shutting down: sockets closing late still try to publish their cursor removal
     const encoder = encoding.createEncoder()
     encoding.writeVarString(encoder, this.id)
     encoding.writeVarUint(encoder, kind)
@@ -48,6 +50,7 @@ export class PubSub {
   }
 
   async close() {
+    this.closed = true
     await Promise.all([this.pub.quit(), this.sub.quit()])
   }
 }

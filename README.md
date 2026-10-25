@@ -1,5 +1,7 @@
 # Collab Editor
 
+[![CI](https://github.com/Prathamesh250205/collab-editor/actions/workflows/ci.yml/badge.svg)](https://github.com/Prathamesh250205/collab-editor/actions/workflows/ci.yml)
+
 A real-time collaborative code editor, like Google Docs for code. Several people open the same document link, edit at the same time, and see each other's live cursors. Edits made offline merge automatically when the connection comes back.
 
 **Stack:** React + TypeScript, CodeMirror 6, Yjs (CRDT), Node.js WebSocket server, PostgreSQL, Redis pub/sub, Docker Compose, GitHub Actions.
