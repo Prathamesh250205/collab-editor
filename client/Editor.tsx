@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { motion, AnimatePresence } from 'motion/react'
 import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 import { IndexeddbPersistence } from 'y-indexeddb'
@@ -6,11 +7,11 @@ import { yCollab } from 'y-codemirror.next'
 import { EditorView, basicSetup } from 'codemirror'
 import { javascript } from '@codemirror/lang-javascript'
 import { SERVER_URL, WS_URL } from './config.ts'
+import { inkTheme, colorFor } from './cmTheme.ts'
+import { Logo } from './Logo.tsx'
 
-type Peer = { name: string; color: string }
+type Peer = { id: number; name: string; color: string; me: boolean }
 type Version = { id: number; createdAt: string; bytes: number }
-
-const COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#f032e6', '#469990']
 
 type Props = { docId: string; name: string; token: string; onLogout: () => void }
 
@@ -20,6 +21,7 @@ export function Editor({ docId, name, token, onLogout }: Props) {
   const [peers, setPeers] = useState<Peer[]>([])
   const [versions, setVersions] = useState<Version[] | null>(null) // null = history panel closed
   const [preview, setPreview] = useState<{ id: number; text: string } | null>(null)
+  const [toast, setToast] = useState('')
   const ytextRef = useRef<Y.Text>(null)
 
   useEffect(() => {
@@ -35,20 +37,26 @@ export function Editor({ docId, name, token, onLogout }: Props) {
     const ytext = ydoc.getText('code')
     ytextRef.current = ytext
 
-    const color = COLORS[hash(name) % COLORS.length]
+    const color = colorFor(name)
     // y-codemirror reads `user` from awareness to draw our cursor on other screens.
     provider.awareness.setLocalStateField('user', { name, color, colorLight: color + '33' })
 
     const updatePeers = () =>
-      setPeers([...provider.awareness.getStates().values()].map(s => s.user).filter(Boolean))
+      setPeers(
+        [...provider.awareness.getStates()]
+          .filter(([, s]) => s.user)
+          .map(([id, s]) => ({ id, name: s.user.name, color: s.user.color, me: id === ydoc.clientID })),
+      )
     provider.awareness.on('change', updatePeers)
     provider.on('status', ({ status }: { status: string }) => setStatus(status))
 
     const view = new EditorView({
       parent: host.current!,
+      doc: ytext.toString(), // start from whatever the replica already holds
       // yCollab binds CodeMirror <-> Y.Text both ways and renders remote cursors.
-      extensions: [basicSetup, javascript({ typescript: true }), yCollab(ytext, provider.awareness, { undoManager: new Y.UndoManager(ytext) })],
+      extensions: [basicSetup, javascript({ typescript: true }), inkTheme, yCollab(ytext, provider.awareness, { undoManager: new Y.UndoManager(ytext) })],
     })
+    view.focus()
     updatePeers()
 
     return () => {
@@ -58,6 +66,12 @@ export function Editor({ docId, name, token, onLogout }: Props) {
       ydoc.destroy()
     }
   }, [docId, name, token])
+
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(''), 1800)
+    return () => clearTimeout(t)
+  }, [toast])
 
   const api = (path: string) => fetch(`${SERVER_URL}/api/docs/${docId}${path}`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json())
 
@@ -78,50 +92,114 @@ export function Editor({ docId, name, token, onLogout }: Props) {
       ytext.insert(0, text)
     })
     setPreview(null)
+    setVersions(null)
+    setToast('Version restored')
   }
+
+  const online = status === 'connected'
 
   return (
     <div className="editor-page">
-      <header>
-        <a href="/">Collab Editor</a>
-        <span className={`status ${status}`}>{status === 'connected' ? 'online' : 'offline – edits saved locally'}</span>
-        <div className="peers">
-          {peers.map((p, i) => (
-            <span key={i} className="peer" style={{ background: p.color }} title={p.name}>
-              {p.name}
-            </span>
-          ))}
+      <header className="ed-bar">
+        <a href="/" className="brand" aria-label="Home">
+          <Logo />
+        </a>
+        <button
+          className="doc-chip mono"
+          onClick={() => navigator.clipboard.writeText(location.href).then(() => setToast('Link copied, send it to a collaborator'))}
+          title="Copy share link"
+        >
+          /d/{docId}
+          <svg width="13" height="13" viewBox="0 0 24 24" aria-hidden><path d="M9 9h10v10H9zM5 15V5h10" fill="none" stroke="currentColor" strokeWidth="2" /></svg>
+        </button>
+
+        <div className={`status-pill ${online ? 'on' : 'off'}`} role="status">
+          <span className="pulse" />
+          {online ? 'Live' : 'Offline · saving locally'}
         </div>
-        <button onClick={toggleHistory}>History</button>
-        <button onClick={() => navigator.clipboard.writeText(location.href)}>Copy link</button>
-        <button onClick={onLogout} title={`Logged in as ${name}`}>Log out</button>
-      </header>
-      <div className="main">
-        <div ref={host} className="editor" />
-        {versions && (
-          <aside className="history">
-            <h3>Versions</h3>
-            {versions.length === 0 && <p>No snapshots yet (taken every minute while the document changes).</p>}
-            {versions.map(v => (
-              <button key={v.id} className={preview?.id === v.id ? 'active' : ''} onClick={() => openVersion(v.id)}>
-                {new Date(v.createdAt).toLocaleString()}
-              </button>
+
+        <div className="ed-spacer" />
+
+        <ul className="avatars" aria-label="People in this document">
+          <AnimatePresence initial={false}>
+            {peers.map(p => (
+              <motion.li
+                key={p.id}
+                layout
+                initial={{ scale: 0.4, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.4, opacity: 0 }}
+                transition={{ type: 'spring', stiffness: 420, damping: 28 }}
+                style={{ background: p.color }}
+                title={p.me ? `${p.name} (you)` : p.name}
+              >
+                {p.name.slice(0, 2).toUpperCase()}
+              </motion.li>
             ))}
-            {preview && (
-              <>
-                <pre>{preview.text}</pre>
-                <button onClick={() => restore(preview.text)}>Restore this version</button>
-              </>
-            )}
-          </aside>
-        )}
+          </AnimatePresence>
+        </ul>
+
+        <button className={`btn btn-ghost btn-sm ${versions ? 'is-active' : ''}`} onClick={toggleHistory}>History</button>
+        <button className="btn btn-ghost btn-sm" onClick={onLogout} title={`Signed in as ${name}`}>Log out</button>
+      </header>
+
+      <div className="ed-main">
+        <div ref={host} className="ed-editor" />
+        <AnimatePresence>
+          {versions && (
+            <motion.aside
+              className="history"
+              initial={{ x: 40, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: 40, opacity: 0 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 32 }}
+            >
+              <div className="history-head">
+                <h3>Version history</h3>
+                <span className="mono muted">snapshot every minute of editing</span>
+              </div>
+              {versions.length === 0 && <p className="muted">No snapshots yet. Keep typing; the first one appears within a minute.</p>}
+              <div className="history-list">
+                {versions.map((v, i) => (
+                  <motion.button
+                    key={v.id}
+                    className={`version ${preview?.id === v.id ? 'active' : ''}`}
+                    onClick={() => openVersion(v.id)}
+                    initial={{ opacity: 0, x: 10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: i * 0.03 }}
+                  >
+                    <span>{timeAgo(v.createdAt)}</span>
+                    <span className="mono muted">{new Date(v.createdAt).toLocaleTimeString()}</span>
+                  </motion.button>
+                ))}
+              </div>
+              {preview && (
+                <div className="preview">
+                  <pre className="mono">{preview.text || '(empty)'}</pre>
+                  <button className="btn btn-primary btn-sm" onClick={() => restore(preview.text)}>Restore this version</button>
+                </div>
+              )}
+            </motion.aside>
+          )}
+        </AnimatePresence>
       </div>
+
+      <AnimatePresence>
+        {toast && (
+          <motion.div className="toast" role="status" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 16 }}>
+            {toast}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
 
-function hash(s: string) {
-  let h = 0
-  for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0
-  return h
+function timeAgo(iso: string) {
+  const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000)
+  if (s < 60) return 'just now'
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`
+  return new Date(iso).toLocaleDateString()
 }
