@@ -201,6 +201,7 @@ export class Rooms {
 }
 
 const FROM_REDIS = Symbol('from-redis')
+const ANTI_ENTROPY_MS = 10_000
 
 // Keeps this instance's copy of a room in sync with the same room on other instances.
 // Changes made by our clients go out to Redis; changes from Redis are applied locally
@@ -220,13 +221,20 @@ async function linkInstances(room: Room, pubsub: PubSub) {
     else if (kind === HELLO) {
       // Another instance just opened this doc. Send it whatever it is missing
       // (edits we have not saved to Postgres yet) and who is here right now.
-      pubsub.publish(room.name, UPDATE, Y.encodeStateAsUpdate(room.doc, payload))
+      const missing = Y.encodeStateAsUpdate(room.doc, payload)
+      if (missing.length > 2) pubsub.publish(room.name, UPDATE, missing) // 2 bytes = empty update
       const clients = [...room.awareness.getStates().keys()]
       if (clients.length) pubsub.publish(room.name, AWARENESS, awarenessProtocol.encodeAwarenessUpdate(room.awareness, clients))
     }
   })
   // Subscribe first, then say hello, so no reply can be missed.
-  pubsub.publish(room.name, HELLO, Y.encodeStateVector(room.doc))
+  const hello = () => pubsub.publish(room.name, HELLO, Y.encodeStateVector(room.doc))
+  hello()
+  // Redis pub/sub is fire-and-forget: a message is lost if an instance is briefly
+  // disconnected from Redis. Repeating the hello is cheap anti-entropy: peers reply
+  // only with what we are missing (usually nothing), so any gap heals within 10s.
+  const timer = setInterval(hello, ANTI_ENTROPY_MS)
+  room.doc.on('destroy', () => clearInterval(timer))
 }
 
 // Writes a room to Postgres at most once per saveIntervalMs while it keeps changing,

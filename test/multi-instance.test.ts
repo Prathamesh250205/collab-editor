@@ -33,3 +33,24 @@ test('an instance opening a doc late gets unsaved edits from the others', async 
   a.provider.destroy()
   b.provider.destroy()
 })
+
+test('a lost Redis message is repaired by periodic anti-entropy', async () => {
+  const doc = uid('lost')
+  const a = await connect(instances[0].port, doc)
+  const b = await connect(instances[1].port, doc)
+  await sleep(100)
+
+  // Simulate Redis dropping instance 0's messages for a moment.
+  const pubsub = instances[0].pubsub!
+  const publish = pubsub.publish
+  pubsub.publish = () => {}
+  a.text.insert(0, 'this update is lost in transit')
+  await sleep(200)
+  expect(b.text.toString()).toBe('')
+  pubsub.publish = publish
+
+  // Within one anti-entropy round (10s) instance 1 asks for what it is missing.
+  await waitFor(() => b.text.toString() === 'this update is lost in transit', 12_000)
+  a.provider.destroy()
+  b.provider.destroy()
+})

@@ -113,6 +113,7 @@ export async function startServer(opts: ServerOptions) {
   return {
     port,
     rooms,
+    pubsub,
     async close() {
       clearInterval(pinger)
       for (const ws of wss.clients) ws.terminate()
